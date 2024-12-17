@@ -87,14 +87,16 @@ LOOP:
 				txt := strings.TrimPrefix(update.Message.Text, "/")
 				var command, arg string
 
-				if strings.Contains(txt, "_") {
+				if update.Message.CommandArguments() != "" {
+					command = update.Message.Command()
+					arg = update.Message.CommandArguments()
+				} else if strings.Contains(txt, "_") {
+
 					data := strings.Split(txt, "_")
 					command = data[0]
 					arg = strings.Join(data[1:], "_")
-
 				} else {
 					command = update.Message.Command()
-					arg = update.Message.CommandArguments()
 				}
 
 				response, err := rm.ManageCommand(
