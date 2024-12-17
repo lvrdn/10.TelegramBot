@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"fmt"
@@ -14,6 +14,7 @@ type Storage interface {
 	GetTaskWithID(int) (*Task, error)
 	SetDoneToTask(id int) error
 	CheckUser(string) (*User, error)
+	GetErrorNoUser() error
 }
 
 type Task struct {
@@ -34,10 +35,36 @@ type CommandHandler struct {
 	ChatID   int64
 	UserName string
 	Arg      string
-	Storage  Storage
+	Storage
+}
+
+func NewCommandHandler(command, userName, arg string, chatID int64, st Storage) *CommandHandler {
+	return &CommandHandler{
+		Command:  command,
+		ChatID:   chatID,
+		Arg:      arg,
+		UserName: userName,
+		Storage:  st,
+	}
+}
+
+func (ch *CommandHandler) CheckUser() error {
+	_, err := ch.Storage.CheckUser(ch.UserName)
+	if err != nil {
+		if err.Error() != ch.Storage.GetErrorNoUser().Error() {
+			return err
+		}
+		err := ch.AddUser()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+
 }
 
 func (ch *CommandHandler) AddUser() error {
+
 	err := ch.Storage.AddUser(ch.UserName, ch.ChatID)
 	if err != nil {
 		return err
@@ -47,12 +74,11 @@ func (ch *CommandHandler) AddUser() error {
 
 func (ch *CommandHandler) ShowTasks(key string) (string, error) {
 	tasks, err := ch.Storage.GetAllTasks()
-	var response string
-
 	if err != nil {
 		return "", err
 	}
 
+	var response string
 	for _, task := range tasks {
 		if task.Done {
 			continue
@@ -76,7 +102,7 @@ func (ch *CommandHandler) ShowTasks(key string) (string, error) {
 			}
 
 		default:
-			response += fmt.Sprintf("assignee: @%s", task.Assigned)
+			response += fmt.Sprintf("assignee: @%s\n/assign_%v", task.Assigned, task.ID)
 		}
 
 		response += "\n\n"
@@ -92,6 +118,9 @@ func (ch *CommandHandler) ShowTasks(key string) (string, error) {
 }
 
 func (ch *CommandHandler) CreateTask() (string, error) {
+	if ch.Arg == "" {
+		return "задача не может быть пустой", nil
+	}
 	id, err := ch.Storage.AddTask(ch.UserName, ch.Arg)
 	if err != nil {
 		return "", err
@@ -100,12 +129,12 @@ func (ch *CommandHandler) CreateTask() (string, error) {
 	return response, nil
 }
 
-func (ch *CommandHandler) AssignTask() (map[int64]string, error) {
+func (ch *CommandHandler) AssignTask() (interface{}, error) {
 
 	response := make(map[int64]string)
 	taskID, err := strconv.Atoi(ch.Arg)
 	if err != nil {
-		return nil, fmt.Errorf("task id in command arg is not a number")
+		return "номер задачи должен быть числом", nil
 	}
 	task, err := ch.Storage.GetTaskWithID(taskID)
 	if err != nil {
@@ -145,45 +174,48 @@ func (ch *CommandHandler) AssignTask() (map[int64]string, error) {
 func (ch *CommandHandler) UnassignTask() (interface{}, error) {
 	taskID, err := strconv.Atoi(ch.Arg)
 	if err != nil {
-		return nil, fmt.Errorf("task id in command arg is not a number")
+		return "номер задачи должен быть числом", nil
 	}
 	task, err := ch.Storage.GetTaskWithID(taskID)
 	if err != nil {
 		return nil, err
 	}
 
-	if task.Assigned == ch.UserName {
-		err := ch.Storage.AddAsigner("", task.ID)
-		if err != nil {
-			return nil, err
-		}
-		owner, err := ch.Storage.CheckUser(task.Owner)
-		if err != nil {
-			return nil, err
-		}
-
-		response := make(map[int64]string)
-		response[ch.ChatID] = "Принято"
-		response[owner.ChatID] = fmt.Sprintf(`Задача "%s" осталась без исполнителя`, task.Name)
-		return response, nil
-
-	} else {
+	if task.Assigned != ch.UserName {
 		return "Задача не на вас", nil
 	}
+
+	err = ch.Storage.AddAsigner("", task.ID)
+	if err != nil {
+		return nil, err
+	}
+	owner, err := ch.Storage.CheckUser(task.Owner)
+	if err != nil {
+		return nil, err
+	}
+
+	response := make(map[int64]string)
+	response[ch.ChatID] = "Принято"
+	response[owner.ChatID] = fmt.Sprintf(`Задача "%s" осталась без исполнителя`, task.Name)
+	return response, nil
 }
 
 func (ch *CommandHandler) ResolveTask() (interface{}, error) {
 	taskID, err := strconv.Atoi(ch.Arg)
 	if err != nil {
-		return nil, fmt.Errorf("task id in command arg is not a number")
+		return "номер задачи должен быть числом", nil
 	}
 
-	err = ch.Storage.SetDoneToTask(taskID)
+	task, err := ch.Storage.GetTaskWithID(taskID)
 	if err != nil {
 		return nil, err
 	}
 
-	task, err := ch.Storage.GetTaskWithID(taskID)
+	if task.Assigned != ch.UserName {
+		return "Задача не на вас", nil
+	}
+
+	err = ch.Storage.SetDoneToTask(taskID)
 	if err != nil {
 		return nil, err
 	}
